@@ -127,7 +127,7 @@ colnames(ld_genes2) <-
     "ALLELE_1_VAR", "ALLELE_1", "MAF_1", "GENE_STABLE_1", "GENE_NAME_1")
 ld_genes2_filtered <- 
   ld_genes2[!is.na(ld_genes2$GENE_STABLE_1) & !is.na(ld_genes2$GENE_STABLE_2) &
-            ld_genes2$GENE_NAME_1 != "" & ld_genes2$GENE_NAME_2 != "", ]
+              ld_genes2$GENE_NAME_1 != "" & ld_genes2$GENE_NAME_2 != "", ]
 
 gene_clusters <- ld_genes2_filtered %>%
   group_by(GENE_STABLE_1) %>%
