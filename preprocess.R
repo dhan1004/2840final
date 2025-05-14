@@ -21,6 +21,10 @@ library(BiocManager)
 library(rtracklayer)
 library(readr)
 library(dbplyr)
+library(reshape2)
+library(ggplot2)
+library(STRINGdb)
+library(igraph)
 
 # get significant SNPS ---------------------------------------------------------
 
@@ -54,8 +58,45 @@ if (length(snp_ids) == length(lp_data)) {
   stop("Mismatch in vector lengths. Check the data extraction process.")
 }
 
+write.csv(gwas_df, "all_snps.csv", row.names = FALSE)
+gwas_df <- read_csv('all_snps.csv',show_col_types = FALSE)
+
 sig_snps <- gwas_df %>% filter(P < 5e-8)
 write.csv(sig_snps, "significant_snps.csv", row.names = FALSE)
+
+effect_size_threshold <- quantile(abs(sig_snps$ES), 0.9, na.rm = TRUE)
+
+# volcano plot
+volcano_data <- gwas_df %>%
+  mutate(
+    beta = ES,
+    log_pval = -log10(P),
+    significant = ifelse(P < 5e-8 & abs(ES) >= effect_size_threshold, "Target", "Not Target")
+  )
+
+volcano <- ggplot(volcano_data, aes(x = beta, y = log_pval, color = significant)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_manual(values = c("Not Target" = "grey", "Target" = "red")) +
+  geom_hline(yintercept = -log10(5e-8), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = c(-effect_size_threshold, effect_size_threshold), linetype = "dashed", color = "black") +
+  annotate("text", x = max(volcano_data$beta), y = -log10(5e-8) + 0.5, 
+           label = "P-value Threshold (5e-8)", color = "black", hjust = 1, size = 3) +
+  annotate("text", x = effect_size_threshold + 0.05, y = max(volcano_data$log_pval), 
+           label = paste("Effect Size Threshold:", round(effect_size_threshold, 2)), color = "black", hjust = 0, size = 3) +
+  annotate("text", x = -effect_size_threshold - 0.05, y = max(volcano_data$log_pval), 
+           label = paste("Effect Size Threshold:", round(-effect_size_threshold, 2)), color = "black", hjust = 1, size = 3) +
+  labs(
+    title = "All SNPs",
+    x = "Effect Size",
+    y = "-log10(P-value)",
+    color = "Target SNPs"
+  ) +
+  theme_classic() +
+  ylim(0, NA)
+
+ggsave("all_snp_volcano.jpeg", width = 9, height = 7)
+
+volcano
 
 # LD data ----------------------------------------------------------------------
 
@@ -135,3 +176,74 @@ gene_clusters <- ld_genes2_filtered %>%
 
 write.csv(ld_genes2_filtered, "mapped_ld_snps_genes.csv", row.names = TRUE)
 saveRDS(ld_matrix, "mapped_ld_snps_genes.rds")
+ld_matrix <- readRDS("ld_matrix.rds")
+
+sig_lds <- read_csv('LD_with_spatial_filtering.csv', show_col_types = FALSE)
+
+set.seed(42)
+sampled_snps <- sample(sig_lds$SNP1, 1000)
+sampled_snps <- unique(sampled_snps)
+colnames(ld_matrix) <- gsub("_.*", "", colnames(ld_matrix))
+rownames(ld_matrix) <- gsub("_.*", "", rownames(ld_matrix))
+ld_matrix_subset <- ld_matrix[sampled_snps, sampled_snps]
+ld_matrix_subset[upper.tri(ld_matrix_subset)] <- NA
+ld_long <- melt(ld_matrix_subset, na.rm = TRUE)
+colnames(ld_long) <- c("SNP1", "SNP2", "R2")
+
+# Convert SNP1 and SNP2 to factors with levels as the SNP order
+ld_long$SNP1 <- factor(ld_long$SNP1, levels = sampled_snps)
+ld_long$SNP2 <- factor(ld_long$SNP2, levels = sampled_snps)
+
+# Calculate the coordinates for the diamond layout
+ld_long$x <- as.numeric(ld_long$SNP1) + as.numeric(ld_long$SNP2)
+ld_long$y <- as.numeric(ld_long$SNP1) - as.numeric(ld_long$SNP2)
+
+color_palette <- c("#FFFFFF", "#FFFFB2", "yellow", "#FD8D3C", "#E31A1C")
+
+# Plot the diamond-shaped heatmap
+heatmap <- ggplot(ld_long, aes(x = x, y = y, fill = R2)) +
+  geom_tile() +
+  scale_fill_gradientn(
+    colors = color_palette,
+    values = scales::rescale(c(-1, -0.25, 0, 0.25, 1)),
+    limits = c(-1, 1),
+    name = "R²"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank()
+  ) +
+  labs(
+    title = "Tilted LD Heatmap for 1000 SNPs",
+    x = "",
+    y = ""
+  ) +
+  coord_fixed()
+
+ggsave("heatmap.jpeg")
+
+# NETWORK ANLAYSIS -------------------------------------------------------------
+
+biogrid_file <- "C:/Users/sissy/coding/2840final/BIOGRID-ORGANISM-4.4.245.tab3/BIOGRID-ORGANISM-Homo_sapiens-4.4.245.tab3.txt"
+
+# Read the BioGRID data
+biogrid_data <- read_tsv(biogrid_file, col_names = TRUE)
+saveRDS(biogrid_data, "biogrid.rds")
+
+# View column names to identify interaction columns
+colnames(biogrid_data)
+
+gene_interactions <- biogrid_data %>%
+  filter("Organism Interactor A" == 9606 & "Organism Interactor B" == 9606) %>%
+  select(Gene1 = "Official Symbol Interactor A", Gene2 = "Official Symbol Interactor B", Interaction = "Experimental System Type")
+
+head(gene_interactions)
+
+gene_interactions <- gene_interactions[gene_interactions$Gene1 != gene_interactions$Gene2, ]
+
+gene_interactions <- gene_interactions[!duplicated(gene_interactions), ]
+
+head(gene_interactions)
